@@ -1,0 +1,170 @@
+-- Developing a data warehouses in SQL Server 2022
+
+--Creating Fact Schema;
+CREATE SCHEMA Fact;
+
+
+-- Creating Dimension Schema;
+CREATE SCHEMA Dimension;
+
+
+--Cheking if the schemas are correctly created;
+SELECT * FROM SYS.SCHEMAS;
+
+--Go to the right Dataset;
+USE SampleDW;
+GO
+
+--Creating the Date Dimension Table;
+CREATE TABLE Dimension.Date (
+DateKey int NOT NULL,
+FullDate date NOT NULL,
+DayName nvarchar(9) NOT NULL,
+DayNumber tinyint NOT NULL,
+MonthName varchar(10) NOT NULL,
+MonthNumber tinyint NOT NULL,
+QuarterNumber tinyint NOT NULL,
+Year tinyint NOT NULL
+
+CONSTRAINT PK_Date PRIMARY KEY CLUSTERED (
+	DateKey ASC
+	)
+);
+GO
+
+
+--Creating the Customer Dimesion Table;
+CREATE TABLE Dimension.Costumer (
+CostumerKey int IDENTITY(1,1) NOT NULL,
+CostumerAlternateKey int NOT NULL,
+FirstName nvarchar(50) NOT NULL,
+LastName nvarchar(50) NOT NULL,
+FullName nvarchar(100) NOT NULL,
+City nvarchar(50) NOT NULL,
+State char(2) NOT NULL,
+StateName nvarchar(20) NOT NULL,
+Zip char(5) NOT NULL
+
+CONSTRAINT PK_Customer PRIMARY KEY CLUSTERED (
+CostumerKey ASC
+	)
+);
+GO
+
+--Decided to delete the location columns and create the Dimension.City Table;
+ALTER TABLE Dimension.Costumer
+DROP COLUMN	 City, State, StateName,Zip
+GO
+
+-- Creating the Dimension.City Table
+DROP TABLE IF EXISTS  Dimension.City 
+
+CREATE TABLE Dimension.City (
+CityKey int IDENTITY(1,1) NOT NULL,
+City nvarchar(50) NOT NULL,
+State char(2) NOT NULL,
+StateName nvarchar(20) NOT NULL,
+Zip char(5) NOT NULL
+
+CONSTRAINT PK_City  PRIMARY KEY CLUSTERED (
+CityKey ASC
+	)
+);
+GO
+
+--Adding the CityKey Column to the Dimension.City Column;
+ALTER TABLE Dimension.Costumer
+ADD CityKey int NOT Null
+GO
+
+
+--Creating Fact Table
+CREATE TABLE Fact.Orders (
+OrderID int IDENTITY(1,2) NOT NULL,
+DateKey int NOT NULL,
+CostumerKey int NOT NULL,
+CityKey int NOT NULL,
+OrderTotal money NOT NULL
+
+CONSTRAINT PK_Order PRIMARY KEY CLUSTERED (
+OrderID ASC
+	)
+);
+GO
+
+--Creating relationships between Fact and Dimension tables
+-- Relationship with Dimension.Date
+ALTER TABLE Fact.Orders WITH CHECK ADD 
+CONSTRAINT FK_Fact_Orders_DateKey_Dimension_Date FOREIGN KEY(DateKey)
+REFERENCES Dimension.Date (DateKey);
+GO
+
+ALTER TABLE Fact.Orders CHECK CONSTRAINT FK_Fact_Orders_DateKey_Dimension_Date;
+GO
+-- Relationship with Dimension.Costumer
+ALTER TABLE Fact.Orders WITH CHECK ADD CONSTRAINT FK_Fact_Orders_CostumerKey_Dimension_Costumer FOREIGN KEY(CostumerKey)
+REFERENCES Dimension.Costumer (CostumerKey);
+GO
+
+ALTER TABLE Fact.Orders CHECK CONSTRAINT FK_Fact_Orders_CostumerKey_Dimension_Costumer;
+GO
+-- Relationship with Dimension.City
+ALTER TABLE Fact.Orders WITH CHECK ADD CONSTRAINT FK_Fact_Orders_CityKey_Dimension_City FOREIGN KEY(CityKey)
+REFERENCES Dimension.City (CityKey);
+GO
+
+ALTER TABLE Fact.Orders CHECK CONSTRAINT FK_Fact_Orders_CityKey_Dimension_City;
+GO
+
+
+-- Creating a Indexed view to have a holistic view of all updated info for the analytical use
+
+CREATE VIEW dbo.OrdersAllInfo WITH SCHEMABINDING
+AS
+ SELECT Orders.OrderID, Orders.CostumerKey, Orders.OrderTotal,
+		Costumer.FirstName, Costumer.LastName, Costumer.FullName,
+		City.City, City.State, City.StateName,City.Zip,
+		Date.FullDate, Date.DayName, Date.DayNumber, Date.MonthName, Date.MonthNumber, Date.QuarterNumber, Date.Year
+ FROM Fact.Orders JOIN Dimension.Date 
+	ON Orders.DateKey=Date.DateKey
+	JOIN Dimension.Costumer
+	ON Orders.CostumerKey=Costumer.CostumerKey
+	JOIN Dimension.City
+	ON Orders.CityKey=City.CityKey;
+GO
+
+CREATE UNIQUE CLUSTERED INDEX IDX_OrederByDate
+ON dbo.OrdersAllInfo (OrderID);
+GO
+
+
+-- Creating Columnstore Index to improve the performance of analytical queries 
+CREATE COLUMNSTORE INDEX IDX_CLMN_FactOrders
+ON Fact.Orders (OrderID, DateKey, CostumerKey, OrderTotal);
+
+
+-- Creating a Memory-optimized columnstore table to increase the performance and speed of accesss to the table
+-- Add a Memory optimized File Group
+ALTER DATABASE SampleDW ADD FILEGROUP SampleMOD CONTAINS memory_optimized_data
+GO
+
+-- Give the filegroup a location on Disk
+ALTER DATABASE SampleDW 
+		ADD FILE (
+		 NAME='SampleDW',
+		 FILENAME= 'C:\Program Files\Microsoft SQL Server\MSSQL16.MSSQLSERVER\MSSQL\DATA\SampleMOD')
+		 TO FILEGROUP SampleMOD
+GO
+
+-- Create a Memory Optimized Fact Table with a clustered columnstore index
+CREATE TABLE Fact.Finance (
+FinanceID int IDENTITY (1,1) NOT NULL PRIMARY KEY NONCLUSTERED,
+DateKey int NOT NULL,
+Amount money NOT NULL,
+
+INDEX IDX_CLMN_FactFinance CLUSTERED COLUMNSTORE
+)
+WITH (MEMORY_OPTIMIZED= ON);
+GO
+
+
